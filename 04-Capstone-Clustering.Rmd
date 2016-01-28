@@ -1,0 +1,181 @@
+---
+title: "04-Capstone-Clustering-Anomalies"
+author: "Ramesh Calamur"
+date: "January 18, 2016"
+output: html_document
+---
+
+
+```{r "Environment setup", echo=FALSE,message=FALSE,warning=FALSE}
+
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(reshape2)
+
+####
+#### Helper Functions - User Defined Functions
+#
+#### user defined function for selecting numeric values and filtering NA values
+#### Arguments: 
+####        factsDF:  data frame with multiple variables as columns 
+####        maxNACnt: threshold count of NAs values for the variable, if below this, the variable
+####                  would be included for calculating correlation matrix
+####  Returns:
+####        numDFforCor - data frame of numeric variables for correlation
+####
+numericNAvars <- function(factsDF, maxNACnt){
+  ### identify the numeric variables and count of NAs of the variables
+  numNAvarDF <- factsDF %>% select(which(sapply(., is.numeric))) %>%
+    summarise_each(funs(sum(is.na(.)))) %>% 
+    gather(bvar,NAcnt) %>%
+    filter( NAcnt > 0 & NAcnt < maxNACnt)
+  ## from the data frame, select the numeric variables that have NAs below threshold   
+  numDFforCor <-  factsDF %>% select(one_of(as.character(numNAvarDF$bvar))) %>%
+    na.omit()
+  rm(numNAvarDF)
+  return(numDFforCor)
+}
+
+## Altman Z Score
+## Arguments:
+##    currentAssetsTotal:
+##    currentLiabilitiesTotal:
+##    assetsTotal:
+##    retainedEarnings:
+##    incomeBeforeInterestAndTax:  equivalent for EBIT
+##    stockholderEquityTotal: equivalent for MarketCapAtEndOfPeriod
+##    liabilitiesTotal:
+##    revenueTotal
+##  Returns:
+##    zScore : computed Altman Z-score
+##
+altmanZscore <- function(currentAssetsTotal, currentLiabilitiesTotal, assetsTotal,
+                         retainedEarnings, incomeBeforeInterestAndTax,
+                         stockholderEquityTotal,liabilitiesTotal,revenueTotal ){
+  workingCapital <- currentAssetsTotal - currentLiabilitiesTotal
+  zScore <- (1.2 * (workingCapital / assetsTotal) +
+               1.4 * (retainedEarnings / assetsTotal) +
+               3.3 * (incomeBeforeInterestAndTax / assetsTotal) +
+               0.6 * (stockholderEquityTotal / liabilitiesTotal) +
+               0.99 * (revenueTotal / assetsTotal) )
+  return (zScore)
+}
+#### End of User Defined Functions
+
+#### Load financial facts
+cash14 <- read.csv("cashflow_statement.csv")
+balsh14 <- read.csv("balance_sheet.csv")
+income14 <- read.csv("income_statement.csv")
+ratios14 <- read.csv("ratios.csv")
+
+### Load filings information
+filings14 <- read.csv("filings.csv")
+```
+
+# Clustering - Detection of anomalies
+
+* Hypothesis #2: Clustering (unsupervised model) to identify similar groups and anomalies
+
+    + Why unsupervised? Target variable or outcome variable for financial statement anomalies requires more extensive data collection and preparation
+    
+    + Data on Financial statements that triggered Regulators action are not available in an readily consumable format. SEC publishes AAER (Accounting and Auditing Enforcement Releases), but they are in narrative text report which requires extensive data preparation
+    
+    + Clustering ratios of financial facts can help identify anomalies
+
+* Clustering approaches evaluated
+
+    + Hierarchical Agglomerative Clustering
+    
+    + k-Means Clustering 
+    
+```{r "Data prep - hierarchical clustering", echo=FALSE,message=FALSE,warning=FALSE}
+outLim <- 0.98
+ratiosDat1 <- ratios14 %>% filter(kind == "ttm" &  (receivablesTurnover < quantile(receivablesTurnover,outLim,na.rm = TRUE)) &
+                    (assetTurnover < quantile(assetTurnover,outLim,na.rm = TRUE)) &
+                    (inventoryTurnover < quantile(inventoryTurnover,outLim,na.rm = TRUE))) %>%
+                    select(receivablesTurnover,assetTurnover,inventoryTurnover) %>%
+                    mutate(receivablesTurnover = (abs(receivablesTurnover)),
+                           inventoryTurnover = (abs(inventoryTurnover)))
+library(fastcluster)
+print("Perform hierarchical clustering. Method: Centroid, metric: Euclidean.")
+print("Ratios considered: assetTurnover, inventoryTurnover, receivablesTurnover ")
+ratiosFitCen<- hclust.vector(as.vector(ratiosDat1), method = "centroid", metric = "euclidean")
+print("Plot dendogram for hierarchical cluster.")
+plot(ratiosFitCen) # display dendogram
+print("Cut tree to 5 clusters.")
+k=5
+clustGroupsCen <- cutree(ratiosFitCen, k) # cut tree into k clusters
+print("Cluster grouping table - hierarchical cluster - centroid")
+###
+table(clustGroupsCen)
+print("Visualize the cluster grouping...")
+ggplot(aes(x = receivablesTurnover, y = inventoryTurnover),data=ratiosDat1) + 
+  geom_point(color = clustGroupsCen)+
+  ggtitle("Clustering model: Hierarchical agglomerative ,method= single")
+```
+
+### Hierarchical agglomerative clustering - single linkage
+
+```{r "Hierarchical clustering - single agglomerative", echo=FALSE,message=FALSE,warning=FALSE}
+## using single linkage 
+print("Perform hierarchical agglomerative clustering. Method: Single linkage, metric: Euclidean.")
+ratiosFitSin<- hclust.vector(as.vector(ratiosDat1), method = "single", metric = "euclidean")
+plot(ratiosFitSin) # display dendogram
+k=5
+clustGroupsSin <- cutree(ratiosFitSin, k) # cut tree into k clusters
+###
+print("Cluster grouping table - hierarchical cluster - single linkage")
+table(clustGroupsSin)
+print("Visualize the cluster grouping...")
+ggplot(aes(x = receivablesTurnover, y = inventoryTurnover),data=ratiosDat1) + 
+  geom_point(color = clustGroupsSin)+
+  ggtitle("Clustering model: Hierarchical agglomerative ,method= single")
+```
+
+### k-Means Clustering 
+
+```{r "k-Means clustering", echo=FALSE,message=FALSE,warning=FALSE}
+### now, do k-means clustering 
+wss <- (nrow(ratiosDat1)-1)*sum(apply(ratiosDat1,2,var))
+for (i in 2:15) wss[i] <- sum(kmeans(ratiosDat1, 
+                                     centers=i)$withinss)
+##  A plot of the within groups sum of squares by number of clusters 
+#  extracted can help determine the appropriate number of clusters.
+plot(1:15, wss, type="b", xlab="Number of Clusters",
+     ylab="Within groups sum of squares")
+set.seed(1)
+k <- 4
+kmcRatios <- kmeans(ratiosDat1, centers = k)
+print("Cluster grouping table - k-means cluster")
+table(kmcRatios$cluster)
+ggplot(aes(x = receivablesTurnover, y = inventoryTurnover),data=ratiosDat1) + 
+  geom_point(color = kmcRatios$cluster)+
+  ggtitle("Clustering model:kmeans")
+
+```
+
+## Comparison of clustering options
+
+* Hierarchical agglomerative clustering (centroid) - grouping results align closer to the "norms" of financial acceptable financial ratios 
+
+  + Hierarchical agglomerative clustering (centroid) - Groups
+    + Cluster Groups    | 1 | 2 | 3 | 4 | 5
+    + Count            | 7944 | 141 |245| 11|    4 
+  
+  + Hierarchical agglomerative clustering (centroid) - Groups
+     + Cluster Groups    | 1 | 2 | 3 | 4 | 5
+     + Count            |8334|  8| 1|  1  |  1 
+
+  + k-Means cluster - Groups
+  
+    + Cluster Groups  |1| 2| 3  |  4 
+  
+    + Count           |765| 7058|  152  |370 
+    
+    
+ 
+
+
+
+

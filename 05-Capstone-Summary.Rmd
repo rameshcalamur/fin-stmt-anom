@@ -1,0 +1,50 @@
+---
+title: "05-Capstone-Summary"
+author: "Ramesh Calamur"
+date: "January 18, 2016"
+output: html_document
+---
+
+## Summary - Detection of Financial Statement Anomalies
+
+* Data Analytics can be used to identify financial statement has anomalies before submitting to regulatory authorities - by Company executives and Compliance staff 
+
+  + This would help identify and take any mitigating actions to avoid regulator red flags and potentially prevent damages to the company's reputation 
+
+* Indicators of financial statement anomalies or risk factors evaluated in this analysis:
+
+  + GAAP accounting anomalies 
+  
+  + Conformance to Benford distribution (of first digits)
+  
+  + Clustering to group financial ratios that are outside the "norms" of similar companies
+
+## Business Impact of Preventive Detection of Financial Statement Anomalies
+
+* Protect company and investors from damaging impact to profits and market value
+
+  + For example, a restatement could cost a mid-cap company like Hertz as much as $50M in immediate costs for series corrective actions after financial report misstatements (Source: AuditAnalytics)
+  
+  + According to WSJ: Companies, on average, **lose more than a quarter of their market value** following a financial restatement or fraud
+  
+## Further data analysis 
+
+  + Validate the cluster grouping with classification tree on the clustered groups with target variable data on financial statement "red flags" data
+  
+  
+## Next steps
+
+* A "dashboard" of Financial Statement Anomaly risk factors as a product/service offering targeted at CXOs of public companies required for file financial statements to regulators
+
+
+  + A concept visualization:
+  
+![Concept Dashboard](./Fin-Dashboard.png)
+
+  
+  + Next steps 
+  
+  + Create a dashboard product/service visualization prototype 
+  
+  + Explore further using data science and analytics to automate the detection financial statement anomalies
+  

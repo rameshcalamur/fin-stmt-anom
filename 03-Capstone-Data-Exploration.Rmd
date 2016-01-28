@@ -1,0 +1,202 @@
+---
+title: "Detecting Anamolies - Data exploration with ratios"
+author: "Ramesh Calamur"
+date: "January 18, 2016"
+output: html_document
+---
+
+---
+```{r "Environment setup", echo=FALSE,message=FALSE,warning=FALSE}
+
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(reshape2)
+#### Load financial facts
+cash14 <- read.csv("cashflow_statement.csv")
+balsh14 <- read.csv("balance_sheet.csv")
+income14 <- read.csv("income_statement.csv")
+ratios14 <- read.csv("ratios.csv")
+
+### Load filings information
+filings14 <- read.csv("filings.csv")
+```
+
+```{r "Helper functions", echo=FALSE,message=FALSE,warning=FALSE}
+#### Helper Functions - User Defined Functions
+#
+#### user defined function for selecting numeric values and filtering NA values
+#### Arguments: 
+####        factsDF:  data frame with multiple variables as columns 
+####        maxNACnt: threshold count of NAs values for the variable, if below this, the variable
+####                  would be included for calculating correlation matrix
+####  Returns:
+####        numDFforCor - data frame of numeric variables for correlation
+####
+numericNAvars <- function(factsDF, maxNACnt){
+  ### identify the numeric variables and count of NAs of the variables
+  numNAvarDF <- factsDF %>% select(which(sapply(., is.numeric))) %>%
+    summarise_each(funs(sum(is.na(.)))) %>% 
+    gather(bvar,NAcnt) %>%
+    filter( NAcnt > 0 & NAcnt < maxNACnt)
+  ## from the data frame, select the numeric variables that have NAs below threshold   
+  numDFforCor <-  factsDF %>% select(one_of(as.character(numNAvarDF$bvar))) %>%
+    na.omit()
+  rm(numNAvarDF)
+  return(numDFforCor)
+}
+
+## Altman Z Score
+## Arguments:
+##    currentAssetsTotal:
+##    currentLiabilitiesTotal:
+##    assetsTotal:
+##    retainedEarnings:
+##    incomeBeforeInterestAndTax:  equivalent for EBIT
+##    stockholderEquityTotal: equivalent for MarketCapAtEndOfPeriod
+##    liabilitiesTotal:
+##    revenueTotal
+##  Returns:
+##    zScore : computed Altman Z-score
+##
+altmanZscore <- function(currentAssetsTotal, currentLiabilitiesTotal, assetsTotal,
+                         retainedEarnings, incomeBeforeInterestAndTax,
+                         stockholderEquityTotal,liabilitiesTotal,revenueTotal ){
+    workingCapital <- currentAssetsTotal - currentLiabilitiesTotal
+    zScore <- (1.2 * (workingCapital / assetsTotal) +
+               1.4 * (retainedEarnings / assetsTotal) +
+               3.3 * (incomeBeforeInterestAndTax / assetsTotal) +
+               0.6 * (stockholderEquityTotal / liabilitiesTotal) +
+               0.99 * (revenueTotal / assetsTotal) )
+  return (zScore)
+}
+#### End of User Defined Functions
+```
+
+## Feature selection # 1 - Standard Financial Ratios 
+
+* Select from the "Standard" financial ratios for anomaly detection
+  
+  + Correlation matrix of financial ratios to select ratios
+  
+  + Efficiency ratios: assetTurnover, fixedAssetTurnover, receivablesTurnover, inventoryTurnover were selected
+
+```{r "Explore correlations", echo=FALSE,message=FALSE,warning=FALSE}
+### Feature selection - find correlation
+library(caret)
+set.seed(2016)
+
+### get a subset of numeric variables to find correlation matrix
+## select only the numeric columns: select(which(sapply(., is.numeric))) 
+### Count of NAs in the balance sheet data set
+
+### Balancesheet facts - consider numeric variables that have less than 200 NAs
+balShforCor <- numericNAvars(balsh14,200)
+### Correlation matrix for Balancesheet data
+balCor <- cor(balShforCor)
+#knitr::kable(balCor) # print correlation matrix for balancesheet facts
+
+#### Correlation matrix for income statement
+### now extract the subset data for numeric variables selected for correlation
+incomeforCor <- numericNAvars(income14,1000)
+### Correlation matrix for Income statement data
+incomeCor <- cor(incomeforCor)
+#knitr::kable(incomeCor)
+#### Correlation matrix for cash flow
+### now extract the subset data for numeric variables selected for correlation
+cashforCor <- numericNAvars(cash14,10000)
+### Correlation matrix for cash statement data
+cashCor <- cor(cashforCor)
+#knitr::kable(cashCor)
+
+## Correlation matrix for ratios 
+### now extract the subset data for numeric variables selected for correlation
+ratioforCor <- numericNAvars(ratios14,200)
+### Correlation matrix for Balancesheet data
+ratioCor <- cor(ratioforCor)
+knitr::kable(ratioCor)
+```
+
+```{r "Ratios by SIC", echo=FALSE,message=FALSE,warning=FALSE}
+### Get the assignedSic code to rations, by joining ratios with filings
+ratios14NSic <- ratios14 %>% 
+  left_join(.,filings14, by = c("accessionNumber" = "accessionNumber", "cikNumber" = "cikNumber")) %>%
+  select(accessionNumber:dividendCoverage,assignedSic)
+  
+### explore the data now
+#### binning SIC categories
+ratios14NSic$sicCat <- cut(ratios14NSic$assignedSic, breaks = c(1,1000,1500,1800,2100,2400,3569,4000,5000,5200,6000,8000,9000,10000),
+                           labels=c("Agriculture","Mining","Construction","Food","Textiles","Industrials","Manufacturing","Transportation","Wholesale","Retail","Finance","Services","Other") )
+
+ggplot(aes(x=assignedSic,y=assetTurnover),data=subset(ratios14NSic,!is.na(assetTurnover)))+
+  geom_jitter()+
+  coord_cartesian(ylim = c(0,20))+
+  facet_wrap(~sicCat)+
+  ggtitle("Asset Turnover Ratio by SIC categories")
+
+
+```
+
+## Feature selection # 2 - Alternatives to Standard Financial Ratios
+## Computed Altman Z-score - anomaly risk score based on multiple financial ratios
+
+* For easier communication of anomaly indicator, a risk score factor of considering multiple ratios can be considered
+
+* Altman Z-score, first published in 1968, reliably sued  as predictor for backruptcy  manufacturing companies
+
+* Z-score = 0.012 x (Working Capital / Total Assets) +
+                0.014 x (Retained Earnings / Total Assets) +
+               0.033 x (Earnings before Interest and Taxes) / Total Assets) +
+              0.006 x (Market Value of Equity / Book value of Total Liabilities)
+               0.999 x (Sales / Total Assets)
+
+* Average for bankrupt companies: -0.25, non-bankrupt companies: +4.48
+
+```{r "Altman Z-score", echo=FALSE,message=FALSE,warning=FALSE}
+#### join income statement and cashflow to calculate Altman Z-scores
+incNbal <- income14 %>% 
+        left_join(.,balsh14) %>% 
+          left_join(.,filings14, by = c("accessionNumber" , "cikNumber" )) %>%
+            select(1:5,currentAssetsTotal, currentLiabilitiesTotal, assetsTotal,
+              retainedEarnings, incomeBeforeInterestAndTax,
+              stockholderEquityTotal,liabilitiesTotal,revenueTotal,assignedSic) %>%
+              na.omit() %>% 
+            mutate( zScore = altmanZscore(currentAssetsTotal, currentLiabilitiesTotal, assetsTotal,
+                              retainedEarnings,incomeBeforeInterestAndTax,
+                              stockholderEquityTotal,liabilitiesTotal,revenueTotal) )
+#####
+## Summary statistics of Z-score
+summary(incNbal$zScore)
+###
+#### binning SIC categories and ratio/score to plot by
+binBySicPlot <- function(dfWithSic, zScore, pTitle){
+  
+  dfWithSic <- mutate(dfWithSic, zScoreAnom = zScore > 10) 
+  dfWithSic$sicCat <- cut(dfWithSic$assignedSic, breaks = c(1,1000,1500,1800,2100,2400,3569,4000,5000,5200,6000,8000,9000,10000),
+                             labels=c("Agriculture","Mining","Construction","Food","Textiles","Industrials","Manufacturing","Transportation",
+                                      "Wholesale","Retail","Finance","Services","Other") )
+ 
+ ggplot(aes(x=assignedSic,y=zScore,color=zScoreAnom),data=subset(dfWithSic))+
+    geom_jitter()+
+    coord_cartesian(ylim = c(0,20))+
+    facet_wrap(~sicCat)+
+    ggtitle(pTitle)
+}
+
+binBySicPlot(dfWithSic = incNbal,zScore = incNbal$zScore, pTitle = "Z-score by SIC")
+#### Plot Z-Score by SICs
+zScoreAnomAll <- incNbal$zScore > 10 
+ggplot(aes(x=cikNumber,y=zScore,color = zScoreAnomAll),data=subset(incNbal))+
+  geom_jitter()+
+  coord_cartesian(ylim = c(0,100))+
+  ggtitle("Z-score by CIK")
+
+```
+
+##Computed Altman z-Score as Financial Statement anomaly risk factor
+
+* Altman zScore can be used as anomaly risk factor
+
+* zScore threshold for anomaly varies by industry sectors. In the above analysis, zScore threshold of 10 are exhibited in Mining, Industrials, Manufacturing, Wholesale, Retail and Finance sectors.
+
+* Further analysis should refine zScore threshold for individual sectors or using clustering to group companies of similar financial profile, instead of using one across industry sectors

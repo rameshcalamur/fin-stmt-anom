@@ -1,0 +1,312 @@
+---
+title: "Detecting Anomalies in Financial Statements"
+author: "Ramesh Calamur"
+date: "January 15, 2016"
+output: html_document
+---
+## Context: Financial Statement Anomalies Trigger Regulator Red Flags
+
+* Public companies file Financial statements reports with Securities Exchanges Commission (SEC) periodically: quarterly 10-Q, annual 10-K
+
+  + Company executives (CEO/CFO/CCO) have responsibility to accuracy of the filings and are legally liable for material misstatements 
+
+  + Regulators at the SEC are using analytical techniques such as Accounting Quality Model to identify outliers and anomalies and to initiate regulator examination of the companies 
+
+
+  
+## Business Impact of Financial Statement Anomalies
+
+* Anomalies in financial statement could be pre-cursor to misstatements or even fraud which can severely damage reputations and company/investor fortunes
+
+* Corrections to financial statements, restatements **after public disclosure** are costly to the company and investors, impacting profits and market value
+  
+## Why should companies and CxOs care?
+
+* CxOs accounted for 68% of individual subjects of SEC’s financial statement enforcement releases
+
+* CFO Magazine: “it can represent a hefty premium on the cost of capital and hurt the careers of senior executives once the shady dealings of such companies come to light.”
+ 
+* SEC intends AQM could be a powerful means of improving accounting, not just for identifying fraud but also for corporate filers with disclosing financials in compliance with GAAP
+
+* Problem studied by academia and regulators, but **no data analytics based solutions** for companies to adopt
+
+![WSJ Earnings management](./WSJ-earnings-mismanagement.png)
+
+## Questions to answer
+
+* What kinds of anomalies are there in the financial statements, that could potentially trigger regulatory red flags?
+
+* How to verify if a financial statement has anomalies before submitting to regulatory authorities? 
+
+## Opportunity: Analytics to detect Financial Statement anomalies before filing
+
+
+**Hypothesis**: Anomalies in Financial Statements that trigger regulatory red flags can be identified using data analytics on financial statements 
+
+* H1: Individual financial statement facts may vary a lot across companies, even within the same sector, but ratios of financial facts can be good risk indicators 
+
+    + A risk score based on combinations of ratios of financial facts to identify and communicate anomaly
+
+    + Solution to the challenge of hundreds of financial facts 
+
+* H2: Clustering (unsupervised model) to identify similar groups and anomalies
+
+    + Clustering ratios of financial facts can help identify anomalies
+
+
+## Approach - specifics, initial proposal
+
+* Data set preparation, wrangling - use the SEC's flattened XBRL data in CSV format
+    + CSV format in long format (key-value pairs), data wrangling to convert to wide format was performed
+
+* Descriptive statistics to identify financial facts variables and computed variables ratios
+
+* Exploratory Data Analysis and Visualizations
+
+* Model, Knowledge Discovery
+
+    + Feature selection, Model, Prediction, Cross-validation
+
+    + Feature selection : select ratios (direct ratios from facts, compound rations from other ratios & facts)
+
+    + k-means clustering to identify cluster for different ratios
+
+    + Estimate cluster size (cree plot)
+
+    + K-means cluster on different ratios
+    
+* Classification on identification clusters
+
+    + CART on individual cluster to identify cluster description
+
+    + Use tree to extract rules on anomaly risk factors
+
+## Approach - Actual, changes to the initial proposal
+
+* After initial data exploration and wrangling, scaled down the scope
+
+* Financial statement included hundreds of variables - scaled down the number of variables to more commonly used facts in balancesheet, cashflow and income statements and common financial ratios
+
+* No supervised models - since the ‘target’ variable or outcome data is not available directly, regression or classification models would not be directly attempted on the data
+
+## Data set preparation, wrangling
+
+* **Data set**
+
+* Financial statements (10-K, 10-Q) in XBRL format from SEC EDGAR
+
+    + Source: https://www.sec.gov/spotlight/xbrl/filings-and-feeds.shtml
+    
+    + XBRL data format is available for all companies from 2010
+    
+* Download XBRL data and use Altova XML/XBRL server convert to SQlite database. Reference: https://github.com/altova/SECDB/blob/master/docs/DB-SCHEMA.md
+
+    + Financial statements in XBRL format not consumable in R
+    
+    + Initial proposal was to use the SEC's flattened XBRL data as CSVs - but that required more effort to "normalize" or "standardize". So, decicded to work with the XBRL format data and use XBRL-aware tools to convert and standardize variables before exporting to CSV format
+
+
+* “Normalize” XBRL tagged data to standard variables to calculate ratios
+
+* Export the balancesheet, cashflow, income statement, ratios data to CSV files
+
+
+```{r echo=FALSE, warning=FALSE,message=FALSE}
+# knitr::opts_chunk$set(out.width = ".1\\textwidth")
+
+
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+
+#### Helper Functions - User Defined Functions
+#
+#### user defined function for selecting numeric values and filtering NA values
+#### Arguments: 
+####        factsDF:  data frame with multiple variables as columns 
+####        maxNACnt: threshold count of NAs values for the variable, if below this, the variable
+####                  would be included for calculating correlation matrix
+####  Returns:
+####        numDFforCor - data frame of numeric variables for correlation
+####
+descStats <- function(factsDF){
+  facts.stats <- t(factsDF %>% select(which(sapply(., is.numeric))) %>% 
+                     summarise_each(funs(sum(is.na(.)),n())) %>%
+                     gather(variable, value) %>%
+                     separate(variable, c("var", "stat"), sep = "\\_") %>%
+                     spread(var, value) %>%
+                     select( -stat,-cikNumber) 
+  )
+  colnames(facts.stats) <- c("TotalCount","NAcount")
+  return(facts.stats)
+}
+### user defined function for descriptive statistics of numeric variables of data frame
+### arguments:
+###       factsDF: data frame with variables
+### returns:
+###       sunStatsDF: data frame containing summary statistics of each variable, a row per variable
+sumStats <- function(factsDF){
+  sumStatsDF <- as.data.frame(matrix(ncol=7, nrow=1))
+  names(sumStatsDF) <- c("Min.","1st Qu.", "Median", "Mean",  "3rd Qu.","Max.", "NA's") 
+  tmpDF <- factsDF %>% select(which(sapply(., is.numeric)))
+  for (nme in names(tmpDF)) {
+    srt <- as.data.frame(t(as.matrix(summary(tmpDF[[nme]]))))
+    ifelse(ncol(srt) ==7,sumStatsDF <- rbind(sumStatsDF,srt),NA)
+  }
+  sumStatsDF <- cbind(names(tmpDF),sumStatsDF) 
+  colnames(sumStatsDF)[1] <- "Variable"
+  return(sumStatsDF)
+}
+
+#### End of User Defined Functions
+```
+
+
+
+```{r, echo=FALSE, warning=FALSE}
+#### Load financial facts
+cash14 <- read.csv("cashflow_statement.csv")
+balsh14 <- read.csv("balance_sheet.csv")
+income14 <- read.csv("income_statement.csv")
+ratios14 <- read.csv("ratios.csv")
+
+### Load filings information
+filings14 <- read.csv("filings.csv")
+### Data set statistics
+print("Data set statistics")
+dset.stats <- sapply(list(balsh14,cash14,income14,ratios14),dim)
+colnames(dset.stats) <- c("Balancesheet","Cashflow","IncomeStatement","Ratios")
+rownames(dset.stats) <- c("Row count","# of variables")
+print(dset.stats)
+
+```
+##2 - Financial Statements - Exploratory Data Analysis
+
+* Financial statement types : Balancesheet, Cashflow Statements, Income Statements
+
+* Statements have hundreds GAAP defined "facts"
+
+* Issue: extreme values for individual financial fact by itself may not be an anomaly: best and worst performing companies or accounting periods
+
+  + "Changes" compared to the facts from prior accounting periods by the company
+  
+      + An understanding of general relationships between certain financial statement facts is necessary to identify relationships that appear unusual
+      
+    + For this project, comparisons with prior accounting periods was not undertaken, due to data collection and preparation issues
+    
+## Descriptive statistics - Balancesheet, Cashflow, Income statements
+```{r "Descriptive statistics", echo=FALSE, warning=FALSE,message=FALSE}
+### Descriptive statistics on the data
+### Descriptive statistics - by SIC code
+### Get the assignedSic code to rations, by joining ratios with filings
+ratios14NSic <- ratios14 %>% 
+  left_join(.,filings14, by = c("accessionNumber" = "accessionNumber", "cikNumber" = "cikNumber")) %>%
+  select(accessionNumber:dividendCoverage,assignedSic)
+
+### explore the data now
+
+
+balsh14NSic <- balsh14 %>% 
+  left_join(.,filings14, by = c("accessionNumber" = "accessionNumber", "cikNumber" = "cikNumber")) %>%
+  select(accessionNumber:tangibleAssetsNet,assignedSic)
+
+
+
+### Cashflow & Sic code
+cash14NSic <- cash14 %>% 
+  left_join(.,filings14, by = c("accessionNumber" = "accessionNumber", "cikNumber" = "cikNumber")) %>%
+  select(accessionNumber:cashAndCashEquivalentsChanges,-duration,assignedSic)
+
+### Income statement & Sic code
+income14NSic <- income14 %>% 
+  left_join(.,filings14, by = c("accessionNumber" = "accessionNumber", "cikNumber" = "cikNumber")) %>%
+  select(accessionNumber:incomeNetApplicableToCommonShares,-duration,assignedSic)
+
+
+## Summary statistics - Balancesheet
+balancesheet.stats <- sumStats(balsh14)
+print("Balancesheet - summary statistics")
+knitr::kable(balancesheet.stats)
+## Summary statistics - Cashflow
+cash.stats <- sumStats(cash14NSic)
+print("Cashflow - summary statistics")
+knitr::kable(cash.stats)
+## Summary statistics - Income Statement
+income.stats <- sumStats(income14NSic)
+print("Income statement - summary statistics")
+knitr::kable(income.stats)
+```
+## Financial Ratios for detecting anomalies
+
+* Approach: Analyze ratios of financial facts, across companies in a sector for anomalies
+
+* "Standard" financial ratios used by professionals to analyze, evaluate company performance
+  
+  + Liquidity ratios:currentRatio, quickRatio, cashRatio, debtRatio, debtEquityRatio, 
+  
+  + Financial Performance ratios: interestCoverage, shortTermDebtCoverage, capitalExpenditureCoverage, dividendCoverage
+  
+  + Efficiency ratios: assetTurnover, fixedAssertTurnover, receivablesTurnover, inventoryTurnover
+  
+  + Profitability ratios: grossProfitMargin, operatingProfitMargin, pretaxProfitMargin, profitMargin
+  
+```{r "Descriptive statistics - Ratios", echo=FALSE, warning=FALSE,message=FALSE}
+## Summary statistics - Ratios
+ratio.stats <- sumStats(ratios14NSic)
+print("Ratios - summary statistics")
+knitr::kable(ratio.stats)
+```
+
+```{r "Histograms", echo=FALSE,warning=FALSE,message=FALSE}
+# histogram for ratio variables
+# Histograms of ratios distributions
+# current, quick, cash ratios
+library(reshape2)
+print("Exploring Ratio variable distributions...")
+ratios.melt <- melt(ratios14[,5:7])
+ggplot(ratios.melt, aes(value)) +
+  geom_histogram( colour='blue', fill='black',breaks=seq(-2,20,by=0.1)) + 
+  facet_wrap(~variable)
+## ProfitMargins..
+print("Exploring Margin ratios...")
+ratios.melt <- melt(ratios14[,8:12])
+ggplot(ratios.melt, aes(value)) +
+  geom_histogram( colour='black', fill='blue',breaks=seq(-1,2,by=0.1)) + 
+  facet_wrap(~variable)
+### returnOnSales...returnOnCapitalEmployed
+print("Exploring return ratios...")
+ratios.melt <- melt(ratios14[,13:16])
+ggplot(ratios.melt, aes(value)) +
+  geom_histogram( colour='blue', fill='blue',breaks=seq(-1,1,by=0.1)) + 
+  facet_wrap(~variable)
+## debt ratios
+print("Exploring debt ratios...")
+ratios.melt <- melt(ratios14[,17:20])
+ggplot(ratios.melt, aes(value)) +
+  geom_histogram( colour='blue', fill='blue',breaks=seq(-1,2,by=0.1)) + 
+  facet_wrap(~variable)
+### assetTurnover, 
+print("Exploring Turnover ratios...")
+ratios.melt <- melt(ratios14[,22:23])
+ggplot(ratios.melt, aes(value)) +
+  geom_histogram( colour='blue', fill='blue',breaks=seq(-1,3,by=0.05)) + 
+  facet_wrap(~variable)
+## receivablesTuronver, inventoryTurnover
+ratios.melt <- melt(ratios14[,24:25])
+ggplot(ratios.melt, aes(value)) +
+  geom_histogram( colour='blue', fill='blue',breaks=seq(-1,20,by=0.1)) + 
+  facet_wrap(~variable)
+## cashflow,sales
+print("Exploring cash/sales ratios...")
+ratios.melt <- melt(ratios14[,26:27])
+ggplot(ratios.melt, aes(value)) +
+  geom_histogram( colour='blue', fill='blue',breaks=seq(-2,5,by=0.1)) + 
+  facet_wrap(~variable)
+## debtCoverage
+ratios.melt <- melt(ratios14[,28:30])
+ggplot(ratios.melt, aes(value)) +
+  geom_histogram( colour='blue', fill='blue',breaks=seq(-2,5,by=0.1)) + 
+  facet_wrap(~variable)
+print("Descriptive statistics complete.")
+
+```
